@@ -73,7 +73,7 @@ def test_read_delta(simple_table):
 
 def test_read_delta_with_different_versions(simple_table):
     print(simple_table)
-    df = ddt.read_delta(simple_table, version=0)
+    df = ddl.read_delta(simple_table, version=0)
     assert df.compute().shape == (100, 3)
 
     df = ddl.read_delta(simple_table, version=1)
@@ -215,13 +215,13 @@ def test_read_history(checkpoint_table):
 def test_vacuum(vacuum_table):
     print(vacuum_table)
     print(os.listdir(vacuum_table))
-    tombstones = ddt.vacuum(vacuum_table, dry_run=True)
+    tombstones = ddl.vacuum(vacuum_table, dry_run=True)
     print(tombstones)
     assert len(tombstones) == 4
 
     before_pq_files_len = len(glob.glob(f"{vacuum_table}/*.parquet"))
     assert before_pq_files_len == 7
-    tombstones = ddt.vacuum(vacuum_table, dry_run=False)
+    tombstones = ddl.vacuum(vacuum_table, dry_run=False)
     after_pq_files_len = len(glob.glob(f"{vacuum_table}/*.parquet"))
     assert after_pq_files_len == 3
 

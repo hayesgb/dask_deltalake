@@ -3,10 +3,10 @@ import os
 from typing import Dict, List, Optional
 from urllib.parse import urlparse
 
+from aiobotocore.session import get_session
 import dask
 import dask.dataframe as dd
 import pyarrow.parquet as pq
-from boto3 import Session
 from dask.base import tokenize
 from dask.dataframe.io import from_delayed
 from dask.delayed import delayed
@@ -175,7 +175,7 @@ def _read_from_catalog(
     if ("AWS_ACCESS_KEY_ID" not in os.environ) and (
         "AWS_SECRET_ACCESS_KEY" not in os.environ
     ):
-        session = Session()
+        session = get_session()
         credentials = session.get_credentials()
         current_credentials = credentials.get_frozen_credentials()
         os.environ["AWS_ACCESS_KEY_ID"] = current_credentials.access_key
