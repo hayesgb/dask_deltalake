@@ -1,0 +1,32 @@
+[tool.poetry]
+name = "dask-deltalake"
+version = "0.1.0"
+description = "Dask + Deltalake"
+authors = ["Greg Hayes <hayesgb@gmail.com>"]
+license = "MIT"
+readme = "README.md"
+packages = [{include = "dask_deltalake"}]
+
+[tool.poetry.dependencies]
+python = ">=3.8,<4"
+dask = {extras = ["dataframe"], version = "^2022.11.1"}
+deltalake = "^0.6.4"
+s3fs = ">=2022.10.0"
+distributed = "^2022.11.1"
+
+
+[tool.poetry.group.dev.dependencies]
+mypy = "^0.991"
+mypy-extensions = "^0.4.3"
+pytest = "^7.2.0"
+pytest-cov = "^4.0.0"
+black = "^22.10.0"
+mock = "^4.0.3"
+pre-commit = "^2.20.0"
+isort = "^5.10.1"
+jupyterlab = "^3.5.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
