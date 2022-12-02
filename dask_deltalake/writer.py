@@ -2,35 +2,29 @@ from __future__ import annotations
 
 import contextlib
 import json
-import os
 import uuid
 from datetime import datetime
 from itertools import chain
-from pathlib import Path
-from typing import Any, Dict, List, Literal, Mapping, Optional, Tuple, Union
-from urllib.parse import urlparse
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import dask
+from dask.base import tokenize
 import dask.dataframe as dd
 import pyarrow as pa
 import pyarrow.dataset as ds
-import pyarrow.parquet as pq
-from dask.base import tokenize
-from dask.dataframe.core import Scalar
-from dask.dataframe.io import from_delayed
 from dask.dataframe.io.utils import _is_local_fs
 from dask.delayed import delayed
-from dask.highlevelgraph import HighLevelGraph
-from deltalake import DataCatalog, DeltaTable, write_deltalake
+from deltalake import DeltaTable
 from deltalake._internal import write_new_deltalake
 from deltalake.schema import delta_arrow_schema_from_pandas
 from deltalake.table import (MAX_SUPPORTED_WRITER_VERSION, DeltaTable,
                              DeltaTableProtocolError)
-from deltalake.writer import (AddAction,  # get_partitions_from_path,
-                              DeltaJSONEncoder, get_file_stats_from_metadata,
+from deltalake.writer import (AddAction,
+                            # get_partitions_from_path,
+                              DeltaJSONEncoder,
+                              get_file_stats_from_metadata,
                               try_get_deltatable)
 from fsspec.core import get_fs_token_paths
-from fsspec.utils import stringify_path
 
 PYARROW_MAJOR_VERSION = int(pa.__version__.split(".", maxsplit=1)[0])
 
@@ -58,7 +52,6 @@ def get_partitions_from_path(path: str) -> Tuple[str, Dict[str, Optional[str]]]:
     return path, out
 
 
-@delayed
 def _write_dataset(
     df,
     table_uri,
@@ -117,7 +110,6 @@ def to_delta_table(
     fs: Optional[pa_fs.FileSystem] = None,
     mode: Literal["error", "append", "overwrite", "ignore"] = "error",
     storage_options: Optional[Dict[str, str]] = None,
-    compute=True,
     compute_kwargs={},
     file_options=None,
     overwrite_schema: bool = False,
@@ -184,17 +176,8 @@ def to_delta_table(
     )
     table_uri = fs._strip_protocol(table_or_uri)
 
-    # if isinstance(table_or_uri, str):
-    #     if "://" in table_or_uri:
-    #         table_uri = table_or_uri
-    #     else:
-    #         # Non-existant local paths are only accepted as fully-qualified URIs
-    #         table_uri = "file://" + str(Path(table_or_uri).absolute())
-    #         # table_uri = str(Path(table_or_uri).absolute())
+
     table = try_get_deltatable(table_or_uri, storage_options)
-    # else:
-    #     table = table_or_uri
-    #     table_uri = table._table.table_uri()
 
     if table:  # already exists
         if schema != table.schema().to_pyarrow() and not (
@@ -239,18 +222,20 @@ def to_delta_table(
     with ctx:
         dfs = df.to_delayed()
         results = [
-            _write_dataset(
-                df,
-                table_uri,
-                fs,
-                schema,
-                partitioning,
-                mode,
-                storage_options,
-                file_options,
-                current_version,
-            )
-            for df in dfs
+            delayed(
+                _write_dataset,
+                name = "write-deltalake" + tokenize(table, df))(
+                    df,
+                    table_uri,
+                    fs,
+                    schema,
+                    partitioning,
+                    mode,
+                    storage_options,
+                    file_options,
+                    current_version,
+                )
+                for df in dfs
         ]
 
     results = dask.compute(*results, **compute_kwargs)
