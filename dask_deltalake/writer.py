@@ -40,10 +40,8 @@ def get_partitions_from_path(path: str) -> Tuple[str, Dict[str, Optional[str]]]:
     parts = path.split("/")
     parts.pop()  # remove filename
     out: Dict[str, Optional[str]] = {}
-
+    parts = [p for p in parts if "=" in p]
     for part in parts:
-        if part == "" or "=" not in part:
-            continue
         key, value = part.split("=", maxsplit=1)
         if value == "__HIVE_DEFAULT_PARTITION__":
             out[key] = None

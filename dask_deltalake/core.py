@@ -39,13 +39,13 @@ class DeltaTableWrapper(object):
         self.fs, self.fs_token, _ = get_fs_token_paths(
             path, storage_options=storage_options
         )
-        self.schema = self.dt.pyarrow_schema()
+        self.schema = self.dt.schema().to_pyarrow()
 
     def read_delta_dataset(self, f: str, **kwargs: Dict[any, any]):
         schema = kwargs.pop("schema", None) or self.schema
         filter = kwargs.pop("filter", None)
         if filter:
-            filter_expression = pq._filters_to_expression(filter)
+            filter_expression = pq.filters_to_expression(filter)
         else:
             filter_expression = None
         return (
