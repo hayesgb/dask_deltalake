@@ -30,3 +30,5 @@ jupyterlab = "^3.5.0"
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
 
+[tool.poetry.scripts]
+dask_deltalake = "dask_deltalake.dask_deltalake.run"

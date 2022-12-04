@@ -283,7 +283,9 @@ def read_delta(
             storage_options=storage_options,
             datetime=datetime,
         )
+
         resultdf = dtw.read_delta_table(columns=columns, **kwargs)
+    resultdf = resultdf.reset_index(drop=True)
     return resultdf
 
 

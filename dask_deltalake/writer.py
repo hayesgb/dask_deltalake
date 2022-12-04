@@ -6,12 +6,14 @@ import uuid
 from datetime import datetime
 from itertools import chain
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from pathlib import Path
 
 import dask
 from dask.base import tokenize
 import dask.dataframe as dd
 import pyarrow as pa
 import pyarrow.dataset as ds
+import pyarrow.fs as pa_fs
 from dask.dataframe.io.utils import _is_local_fs
 from dask.delayed import delayed
 from deltalake import DeltaTable
@@ -23,13 +25,15 @@ from deltalake.writer import (AddAction,
                             # get_partitions_from_path,
                               DeltaJSONEncoder,
                               get_file_stats_from_metadata,
-                              try_get_deltatable)
+                              try_get_deltatable
+                              )
+from deltalake.fs import DeltaStorageHandler
 from fsspec.core import get_fs_token_paths
 
 PYARROW_MAJOR_VERSION = int(pa.__version__.split(".", maxsplit=1)[0])
 
 
-__all__ = ("to_delta_table", "read_delta_table")
+__all__ = ("to_delta")
 
 NONE_LABEL = "__null_dask_index__"
 
@@ -88,7 +92,7 @@ def _write_dataset(
 
     ds.write_dataset(
         data=data,
-        base_dir=table_uri,
+        base_dir="/",
         basename_template=f"{current_version + 1}-{uuid.uuid4()}-{{i}}.parquet",
         format="parquet",
         partitioning=partitioning,
@@ -100,7 +104,7 @@ def _write_dataset(
     return add_actions
 
 
-def to_delta_table(
+def to_delta(
     df: dd.DataFrame,
     table_or_uri: Union[str, DeltaTable],
     schema: Optional[pa.Schema] = None,
@@ -157,8 +161,9 @@ def to_delta_table(
     # We use Arrow to write the dataset.
     # See https://arrow.apache.org/docs/python/generated/pyarrow.Table.html#pyarrow.Table.from_pandas
     # for how pyarrow handles the index.
-    # if df._meta.index.name is not None:
-    # df = df.reset_index()
+
+    if df._meta.index.name is not None:
+        raise DeltaTableProtocolError("Unable to write table with index.  Call `reset_index()` first!")
 
     if isinstance(partition_by, str):
         partition_by = [partition_by]
@@ -168,14 +173,28 @@ def to_delta_table(
     if fs is not None:
         raise NotImplementedError
 
+
     # Get the fs and trim any protocol information from the path before forwarding
-    fs, _, paths = get_fs_token_paths(
-        table_or_uri, mode="wb", storage_options=storage_options
-    )
-    table_uri = fs._strip_protocol(table_or_uri)
+    if isinstance(table_or_uri, str):
+        if "://" in table_or_uri:
+            table_uri = table_or_uri
+        else:
+            # Non-existant local paths are only accepted as fully-qualified URIs
+            table_uri = "file://" + str(Path(table_or_uri).absolute())
+        table = try_get_deltatable(table_or_uri, storage_options)
+    else:
+        table = table_or_uri
+        table_uri = table._table.table_uri()
 
 
     table = try_get_deltatable(table_or_uri, storage_options)
+
+    if fs is None:
+        if table is not None:
+            storage_options = table._storage_options or {}
+            storage_options.update(storage_options or {})
+        fs = pa_fs.PyFileSystem(DeltaStorageHandler(table_uri, storage_options))
+
 
     if table:  # already exists
         if schema != table.schema().to_pyarrow() and not (
@@ -259,4 +278,3 @@ def to_delta_table(
             schema,
         )
 
-    fs.invalidate_cache(table_or_uri)
