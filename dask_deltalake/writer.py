@@ -20,11 +20,17 @@ from deltalake import DeltaTable
 from deltalake._internal import write_new_deltalake
 from deltalake.fs import DeltaStorageHandler
 from deltalake.schema import delta_arrow_schema_from_pandas
-from deltalake.table import (MAX_SUPPORTED_WRITER_VERSION, DeltaTable,
-                             DeltaTableProtocolError)
-from deltalake.writer import (AddAction,  # get_partitions_from_path,
-                              DeltaJSONEncoder, get_file_stats_from_metadata,
-                              try_get_deltatable)
+from deltalake.table import (
+    MAX_SUPPORTED_WRITER_VERSION,
+    DeltaTable,
+    DeltaTableProtocolError,
+)
+from deltalake.writer import (
+    AddAction,  # get_partitions_from_path,
+    DeltaJSONEncoder,
+    get_file_stats_from_metadata,
+    try_get_deltatable,
+)
 from fsspec.core import get_fs_token_paths
 
 PYARROW_MAJOR_VERSION = int(pa.__version__.split(".", maxsplit=1)[0])
