@@ -1,5 +1,6 @@
-from dask.datasets import timeseries
 import pytest
+from dask.datasets import timeseries
+
 
 @pytest.fixture()
 def sample_ddf():

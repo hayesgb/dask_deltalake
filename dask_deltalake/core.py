@@ -3,10 +3,10 @@ import os
 from typing import Dict, List, Optional
 from urllib.parse import urlparse
 
-from aiobotocore.session import get_session
 import dask
 import dask.dataframe as dd
 import pyarrow.parquet as pq
+from aiobotocore.session import get_session
 from dask.base import tokenize
 from dask.dataframe.io import from_delayed
 from dask.delayed import delayed

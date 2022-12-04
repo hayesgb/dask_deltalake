@@ -5,35 +5,32 @@ import json
 import uuid
 from datetime import datetime
 from itertools import chain
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 from pathlib import Path
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import dask
-from dask.base import tokenize
 import dask.dataframe as dd
 import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.fs as pa_fs
+from dask.base import tokenize
 from dask.dataframe.io.utils import _is_local_fs
 from dask.delayed import delayed
 from deltalake import DeltaTable
 from deltalake._internal import write_new_deltalake
+from deltalake.fs import DeltaStorageHandler
 from deltalake.schema import delta_arrow_schema_from_pandas
 from deltalake.table import (MAX_SUPPORTED_WRITER_VERSION, DeltaTable,
                              DeltaTableProtocolError)
-from deltalake.writer import (AddAction,
-                            # get_partitions_from_path,
-                              DeltaJSONEncoder,
-                              get_file_stats_from_metadata,
-                              try_get_deltatable
-                              )
-from deltalake.fs import DeltaStorageHandler
+from deltalake.writer import (AddAction,  # get_partitions_from_path,
+                              DeltaJSONEncoder, get_file_stats_from_metadata,
+                              try_get_deltatable)
 from fsspec.core import get_fs_token_paths
 
 PYARROW_MAJOR_VERSION = int(pa.__version__.split(".", maxsplit=1)[0])
 
 
-__all__ = ("to_delta")
+__all__ = "to_delta"
 
 NONE_LABEL = "__null_dask_index__"
 
@@ -163,7 +160,9 @@ def to_delta(
     # for how pyarrow handles the index.
 
     if df._meta.index.name is not None:
-        raise DeltaTableProtocolError("Unable to write table with index.  Call `reset_index()` first!")
+        raise DeltaTableProtocolError(
+            "Unable to write table with index.  Call `reset_index()` first!"
+        )
 
     if isinstance(partition_by, str):
         partition_by = [partition_by]
@@ -172,7 +171,6 @@ def to_delta(
 
     if fs is not None:
         raise NotImplementedError
-
 
     # Get the fs and trim any protocol information from the path before forwarding
     if isinstance(table_or_uri, str):
@@ -186,7 +184,6 @@ def to_delta(
         table = table_or_uri
         table_uri = table._table.table_uri()
 
-
     table = try_get_deltatable(table_or_uri, storage_options)
 
     if fs is None:
@@ -194,7 +191,6 @@ def to_delta(
             storage_options = table._storage_options or {}
             storage_options.update(storage_options or {})
         fs = pa_fs.PyFileSystem(DeltaStorageHandler(table_uri, storage_options))
-
 
     if table:  # already exists
         if schema != table.schema().to_pyarrow() and not (
@@ -239,20 +235,18 @@ def to_delta(
     with ctx:
         dfs = df.to_delayed()
         results = [
-            delayed(
-                _write_dataset,
-                name = "write-deltalake" + tokenize(table, df))(
-                    df,
-                    table_uri,
-                    fs,
-                    schema,
-                    partitioning,
-                    mode,
-                    storage_options,
-                    file_options,
-                    current_version,
-                )
-                for df in dfs
+            delayed(_write_dataset, name="write-deltalake" + tokenize(table, df))(
+                df,
+                table_uri,
+                fs,
+                schema,
+                partitioning,
+                mode,
+                storage_options,
+                file_options,
+                current_version,
+            )
+            for df in dfs
         ]
 
     results = dask.compute(*results, **compute_kwargs)
@@ -277,4 +271,3 @@ def to_delta(
             partition_by or [],
             schema,
         )
-
