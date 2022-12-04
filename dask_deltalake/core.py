@@ -3,10 +3,10 @@ import os
 from typing import Dict, List, Optional
 from urllib.parse import urlparse
 
-from aiobotocore.session import get_session
 import dask
 import dask.dataframe as dd
 import pyarrow.parquet as pq
+from aiobotocore.session import get_session
 from dask.base import tokenize
 from dask.dataframe.io import from_delayed
 from dask.delayed import delayed
@@ -39,13 +39,13 @@ class DeltaTableWrapper(object):
         self.fs, self.fs_token, _ = get_fs_token_paths(
             path, storage_options=storage_options
         )
-        self.schema = self.dt.pyarrow_schema()
+        self.schema = self.dt.schema().to_pyarrow()
 
     def read_delta_dataset(self, f: str, **kwargs: Dict[any, any]):
         schema = kwargs.pop("schema", None) or self.schema
         filter = kwargs.pop("filter", None)
         if filter:
-            filter_expression = pq._filters_to_expression(filter)
+            filter_expression = pq.filters_to_expression(filter)
         else:
             filter_expression = None
         return (
@@ -151,7 +151,7 @@ class DeltaTableWrapper(object):
             self.dt.load_with_datetime(self.datetime)
         return self.dt.file_uris()
 
-    def read_delta(self, **kwargs) -> dd.core.DataFrame:
+    def read_delta_table(self, **kwargs) -> dd.core.DataFrame:
         """
         Reads the list of parquet files in parallel
         """
@@ -261,7 +261,7 @@ def read_delta(
 
     Examples
     --------
-    >>> df = dd.read_delta('s3://bucket/my-delta-table')  # doctest: +SKIP
+    >>> ddf = dd.read_delta('s3://bucket/my-delta-table')  # doctest: +SKIP
 
     """
     if catalog is not None:
@@ -283,7 +283,9 @@ def read_delta(
             storage_options=storage_options,
             datetime=datetime,
         )
-        resultdf = dtw.read_delta(columns=columns, **kwargs)
+
+        resultdf = dtw.read_delta_table(columns=columns, **kwargs)
+    resultdf = resultdf.reset_index(drop=True)
     return resultdf
 
 
