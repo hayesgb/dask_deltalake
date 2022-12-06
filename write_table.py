@@ -13,7 +13,7 @@ def to():
     "AWS_REGION": REGION, "AWS_S3_ALLOW_UNSAFE_RENAME": AWS_S3_ALLOW_UNSAFE_RENAME}
     ddf = timeseries()
     ddf = ddf.reset_index()
-    ddl.to_delta(ddf, "s3://hayesgb-scratch/test_delta/run_12.delta",
+    ddl.to_delta(ddf, "s3://hayesgb-scratch/test_delta/run_13.delta",
     storage_options=STORAGE_OPTIONS,
     )
 

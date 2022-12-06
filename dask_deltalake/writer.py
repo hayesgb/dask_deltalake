@@ -98,7 +98,7 @@ def _write_dataset(
 
     ds.write_dataset(
         data=data,
-        base_dir=table_uri,
+        base_dir="/",
         basename_template=f"{current_version + 1}-{uuid.uuid4()}-{{i}}.parquet",
         format="parquet",
         partitioning=partitioning,
@@ -188,15 +188,14 @@ def to_delta(
 
         if storage_options:
             if table_uri.startswith("s3://"):
-                from s3fs import S3FileSystem
-                s3fs_storage_options = {
-                    "key": storage_options["AWS_ACCESS_KEY_ID"],
-                    "secret": storage_options["AWS_SECRET_ACCESS_KEY"],
-                    "client_kwargs": {
-                        "region_name": storage_options["AWS_REGION"]
+                pyarrow_storage_options = {
+                    "access_key": storage_options["AWS_ACCESS_KEY_ID"],
+                    "secret_key": storage_options["AWS_SECRET_ACCESS_KEY"],
+                    "region": storage_options["AWS_REGION"]
                     }
-                }
-            fs = S3FileSystem(**s3fs_storage_options)
+            _, normalized_path = pa_fs.FileSystem.from_uri(table_uri)
+            raw_fs = pa_fs.S3FileSystem(**pyarrow_storage_options)
+            fs = pa_fs.SubTreeFileSystem(normalized_path, raw_fs)
 
             try:
                 table = try_get_deltatable(table_uri, storage_options)

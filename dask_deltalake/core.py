@@ -35,10 +35,10 @@ class DeltaTableWrapper(object):
         self.columns = columns
         self.datetime = datetime
         self.storage_options = storage_options
-        self.dt = DeltaTable(table_uri=self.path, version=self.version)
-        self.fs, self.fs_token, _ = get_fs_token_paths(
-            path, storage_options=storage_options
-        )
+        self.dt = DeltaTable(table_uri=self.path, version=self.version, self.storage_options)
+        # self.fs, self.fs_token, _ = get_fs_token_paths(
+        #     path, storage_options=storage_options
+        # )
         self.schema = self.dt.schema().to_pyarrow()
 
     def read_delta_dataset(self, f: str, **kwargs: Dict[any, any]):
