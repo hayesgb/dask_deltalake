@@ -13,6 +13,7 @@ dask = {extras = ["dataframe"], version = "^2022.11.1"}
 deltalake = "^0.6.4"
 s3fs = ">=2022.10.0"
 distributed = "^2022.11.1"
+bokeh = "<3.0"
 
 
 [tool.poetry.group.dev.dependencies]

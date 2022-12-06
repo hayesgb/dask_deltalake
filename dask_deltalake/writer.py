@@ -7,6 +7,8 @@ from datetime import datetime
 from itertools import chain
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from fsspec.core import get_fs_token_paths
+from fsspec.spec import AbstractFileSystem
 
 import dask
 import dask.dataframe as dd
@@ -17,13 +19,14 @@ from dask.base import tokenize
 from dask.dataframe.io.utils import _is_local_fs
 from dask.delayed import delayed
 from deltalake import DeltaTable
-from deltalake._internal import write_new_deltalake
+from deltalake._internal import write_new_deltalake, DeltaFileSystemHandler
 from deltalake.fs import DeltaStorageHandler
 from deltalake.schema import delta_arrow_schema_from_pandas
 from deltalake.table import (
     MAX_SUPPORTED_WRITER_VERSION,
     DeltaTable,
     DeltaTableProtocolError,
+    PyDeltaTableError,
 )
 from deltalake.writer import (
     AddAction,  # get_partitions_from_path,
@@ -95,7 +98,7 @@ def _write_dataset(
 
     ds.write_dataset(
         data=data,
-        base_dir="/",
+        base_dir=table_uri,
         basename_template=f"{current_version + 1}-{uuid.uuid4()}-{{i}}.parquet",
         format="parquet",
         partitioning=partitioning,
@@ -175,30 +178,40 @@ def to_delta(
 
     meta, schema = delta_arrow_schema_from_pandas(df.head())
 
-    if fs is not None:
-        raise NotImplementedError
-
-    # Get the fs and trim any protocol information from the path before forwarding
     if isinstance(table_or_uri, str):
         if "://" in table_or_uri:
             table_uri = table_or_uri
+
         else:
             # Non-existant local paths are only accepted as fully-qualified URIs
             table_uri = "file://" + str(Path(table_or_uri).absolute())
-        table = try_get_deltatable(table_or_uri, storage_options)
-    else:
+
+        if storage_options:
+            if table_uri.startswith("s3://"):
+                from s3fs import S3FileSystem
+                s3fs_storage_options = {
+                    "key": storage_options["AWS_ACCESS_KEY_ID"],
+                    "secret": storage_options["AWS_SECRET_ACCESS_KEY"],
+                    "client_kwargs": {
+                        "region_name": storage_options["AWS_REGION"]
+                    }
+                }
+            fs = S3FileSystem(**s3fs_storage_options)
+
+            try:
+                table = try_get_deltatable(table_uri, storage_options)
+            except Exception:
+                raise PyDeltaTableError("Failed to find table.  Confirm storage_options")
+            
+    elif isinstance(table_or_uri, DeltaTable):
         table = table_or_uri
         table_uri = table._table.table_uri()
-
-    table = try_get_deltatable(table_or_uri, storage_options)
-
-    if fs is None:
-        if table is not None:
-            storage_options = table._storage_options or {}
-            storage_options.update(storage_options or {})
-        fs = pa_fs.PyFileSystem(DeltaStorageHandler(table_uri, storage_options))
+    else:
+        raise RuntimeError
 
     if table:  # already exists
+        storage_options = table._storage_options or {}
+        storage_options.update(storage_options or {})
         if schema != table.schema().to_pyarrow() and not (
             mode == "overwrite" and overwrite_schema
         ):
@@ -241,7 +254,7 @@ def to_delta(
     with ctx:
         dfs = df.to_delayed()
         results = [
-            delayed(_write_dataset, name="write-deltalake" + tokenize(table, df))(
+            delayed(_write_dataset, name="write-deltalake-" + tokenize(table, df))(
                 df,
                 table_uri,
                 fs,
@@ -257,6 +270,7 @@ def to_delta(
 
     results = dask.compute(*results, **compute_kwargs)
     add_actions = list(chain.from_iterable(results))
+
 
     if table is None:
         write_new_deltalake(
