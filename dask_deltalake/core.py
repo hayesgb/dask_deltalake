@@ -5,14 +5,22 @@ from urllib.parse import urlparse
 
 import dask
 import dask.dataframe as dd
+import pandas as pd
 import pyarrow.parquet as pq
 from aiobotocore.session import get_session
 from dask.base import tokenize
 from dask.dataframe.io import from_delayed
+from dask.dataframe.core import new_dd_object
+from dask.layers import DataFrameIOLayer
+from dask.highlevelgraph import HighLevelGraph
 from dask.delayed import delayed
 from deltalake import DataCatalog, DeltaTable
 from fsspec.core import get_fs_token_paths
 from pyarrow import dataset as pa_ds
+import pyarrow.fs as pa_fs
+from dask.dataframe.utils import make_meta
+from functools import partial
+import pyarrow as pa
 
 
 class DeltaTableWrapper(object):
@@ -29,47 +37,39 @@ class DeltaTableWrapper(object):
         columns: List[str],
         datetime: Optional[str] = None,
         storage_options: Dict[str, str] = None,
+        arrow_options: dict = {},
     ) -> None:
         self.path: str = path
         self.version: int = version
         self.columns = columns
         self.datetime = datetime
         self.storage_options = storage_options
-        self.dt = DeltaTable(table_uri=self.path, version=self.version, self.storage_options)
-        # self.fs, self.fs_token, _ = get_fs_token_paths(
-        #     path, storage_options=storage_options
-        # )
+        self.dt = DeltaTable(table_uri=self.path, version=self.version, storage_options=self.storage_options)
         self.schema = self.dt.schema().to_pyarrow()
+        self.arrow_options = arrow_options
+        if self.path.startswith("s3://"):
+            pyarrow_storage_options = {
+                "access_key": storage_options["AWS_ACCESS_KEY_ID"],
+                "secret_key": storage_options["AWS_SECRET_ACCESS_KEY"],
+                "region": storage_options["AWS_REGION"]
+                }
+            _, normalized_path = pa_fs.FileSystem.from_uri(path)
+            raw_fs = pa_fs.S3FileSystem(**pyarrow_storage_options)
+            self.fs = pa_fs.SubTreeFileSystem(normalized_path, raw_fs)
 
-    def read_delta_dataset(self, f: str, **kwargs: Dict[any, any]):
+    def read_delta_dataset(self, **kwargs: Dict[any, any]):
         schema = kwargs.pop("schema", None) or self.schema
         filter = kwargs.pop("filter", None)
-        if filter:
-            filter_expression = pq.filters_to_expression(filter)
-        else:
-            filter_expression = None
-        return (
-            pa_ds.dataset(
-                source=f,
-                schema=schema,
-                filesystem=self.fs,
-                format="parquet",
-                partitioning="hive",
-            )
-            .to_table(filter=filter_expression, columns=self.columns)
-            .to_pandas()
-        )
+        columns = kwargs.pop("columns", None)
+        dataset = self.dt.to_pyarrow_dataset(filesystem = self.fs)
+        batches = dataset.to_batches(filter=filter, columns=columns)
+        return [b for b in batches if b.num_rows > 0]
 
-    def _make_meta_from_schema(self) -> Dict[str, str]:
-        meta = dict()
-
-        for field in self.schema:
-            if self.columns:
-                if field.name in self.columns:
-                    meta[field.name] = field.type.to_pandas_dtype()
-            else:
-                meta[field.name] = field.type.to_pandas_dtype()
-        return meta
+    def make_meta_from_schema(self) -> Dict[str, str]:
+        meta = self.schema.empty_table().to_pandas(**self.arrow_options)
+        if self.columns:
+            meta = meta.drop(columns = self.columns)
+        return make_meta(meta)
 
     def _history_helper(self, log_file_name: str):
         log = self.fs.cat(log_file_name).decode().split("\n")
@@ -151,24 +151,6 @@ class DeltaTableWrapper(object):
             self.dt.load_with_datetime(self.datetime)
         return self.dt.file_uris()
 
-    def read_delta_table(self, **kwargs) -> dd.core.DataFrame:
-        """
-        Reads the list of parquet files in parallel
-        """
-        pq_files = self.get_pq_files()
-        if len(pq_files) == 0:
-            raise RuntimeError("No Parquet files are available")
-        parts = [
-            delayed(
-                self.read_delta_dataset,
-                name="read-delta-table-" + tokenize(self.fs_token, f, **kwargs),
-            )(f, **kwargs)
-            for f in list(pq_files)
-        ]
-        meta = self._make_meta_from_schema()
-        return from_delayed(parts, meta=meta)
-
-
 def _read_from_catalog(
     database_name: str, table_name: str, **kwargs
 ) -> dd.core.DataFrame:
@@ -188,6 +170,8 @@ def _read_from_catalog(
     df = dd.read_parquet(dt.file_uris(), **kwargs)
     return df
 
+def _fetch_batches(chunks, arrow_options: dict):
+    return pd.concat([chunk.to_pandas(**arrow_options) for chunk in chunks], axis=1)
 
 def read_delta(
     path: Optional[str] = None,
@@ -198,6 +182,7 @@ def read_delta(
     columns: List[str] = None,
     storage_options: Dict[str, str] = None,
     datetime: str = None,
+    arrow_options: dict = {},
     **kwargs,
 ):
     """
@@ -276,17 +261,45 @@ def read_delta(
     else:
         if path is None:
             raise ValueError("Please Provide Delta Table path")
+        
+        label = "read-deltalake-"
+        output_name = label + tokenize(
+            path,
+            storage_options,
+            table_name,
+            version,
+            columns,
+            datetime,
+        )
         dtw = DeltaTableWrapper(
             path=path,
             version=version,
             columns=columns,
             storage_options=storage_options,
             datetime=datetime,
+            arrow_options = arrow_options,
         )
+        batches = dtw.read_delta_dataset()
 
-        resultdf = dtw.read_delta_table(columns=columns, **kwargs)
-    resultdf = resultdf.reset_index(drop=True)
-    return resultdf
+    if not batches:
+        meta = dd.utils.make_meta({})
+        graph = {{output_name, 0}: meta}
+        divisions = (None, None)
+        return new_dd_object(graph, output_name, meta, divisions)
+    
+    meta = dtw.make_meta_from_schema()
+
+    layer = DataFrameIOLayer(
+        output_name,
+        meta.columns,
+        batches,
+        partial(_fetch_batches, arrow_options=arrow_options),
+        label=label
+    )
+
+    divisions = tuple([None] * (len(batches) + 1))
+    graph = HighLevelGraph({output_name: layer}, {output_name: set()})
+    return new_dd_object(graph, output_name, meta, divisions)
 
 
 def read_delta_history(
