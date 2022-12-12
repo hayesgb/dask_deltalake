@@ -11,4 +11,3 @@ def sample_ddf():
             "strings": str,
         }
     )
-

@@ -2,15 +2,15 @@ import glob
 import os
 import tempfile
 import zipfile
+from pathlib import Path
 
+import numpy as np
+import pandas as pd
 import pytest
+from dask.dataframe.utils import assert_eq
 from mock import MagicMock, patch
 
 import dask_deltalake as ddl
-from dask.dataframe.utils import assert_eq
-import pandas as pd
-import numpy as np
-from pathlib import Path
 
 
 @pytest.fixture(scope="session")
@@ -66,6 +66,7 @@ def empty_table2(tmpdir):
 def checkpoint_table():
     # with tempfile.TemporaryDirectory as td:
     from pathlib import Path
+
     cwd = Path.cwd()
     output_dir = cwd
     deltaf = zipfile.ZipFile("tests/data/checkpoint.zip")
@@ -172,11 +173,11 @@ def test_load_with_datetime(simple_table2):
     log_dir = f"{simple_table2}/_delta_log"
     print(log_dir)
     log_mtime_pair = [
-        ("00000000000000000000.json", 1588398451.0),  #2020-05-02
-        ("00000000000000000001.json", 1588484851.0),  #2020-05-03
-        ("00000000000000000002.json", 1588571251.0),  #2020-05-04
-        ("00000000000000000003.json", 1588657651.0),  #2020-05-05
-        ("00000000000000000004.json", 1588744051.0),  #2020-05-06
+        ("00000000000000000000.json", 1588398451.0),  # 2020-05-02
+        ("00000000000000000001.json", 1588484851.0),  # 2020-05-03
+        ("00000000000000000002.json", 1588571251.0),  # 2020-05-04
+        ("00000000000000000003.json", 1588657651.0),  # 2020-05-05
+        ("00000000000000000004.json", 1588744051.0),  # 2020-05-06
     ]
     for file_name, dt_epoch in log_mtime_pair:
         file_path = os.path.join(log_dir, file_name)
@@ -184,22 +185,16 @@ def test_load_with_datetime(simple_table2):
         os.utime(file_path, (dt_epoch, dt_epoch))
 
     expected = ddl.read_delta(simple_table2, version=0)
-    result = ddl.read_delta(
-        simple_table2, datetime="2020-05-01T00:47:31-07:00"
-    )
+    result = ddl.read_delta(simple_table2, datetime="2020-05-01T00:47:31-07:00")
     print(result)
     assert_eq(expected, result)
 
     expected = ddl.read_delta(simple_table2, version=1)
-    result = ddl.read_delta(
-        simple_table2, datetime="2020-05-02T22:47:31-07:00"
-    )
+    result = ddl.read_delta(simple_table2, datetime="2020-05-02T22:47:31-07:00")
     assert_eq(expected, result)
 
     expected = ddl.read_delta(simple_table2, version=4)
-    result = ddl.read_delta(
-        simple_table2, datetime="2020-05-25T22:47:31-07:00"
-    )
+    result = ddl.read_delta(simple_table2, datetime="2020-05-25T22:47:31-07:00")
     assert_eq(expected, result)
 
 
@@ -208,24 +203,26 @@ def test_read_history(checkpoint_table):
     assert len(history) == 26
 
     last_commit_info = history.iloc[0]
-    last_commit_info == pd.json_normalize({
-        "commitInfo": {
-            "timestamp": 1630942389906,
-            "operation": "WRITE",
-            "operationParameters": {"mode": "Append", "partitionBy": "[]"},
-            "readVersion": 24.0,
-            "isBlindAppend": True,
-            "operationMetrics": {
-                "numFiles": "6",
-                "numOutputBytes": "5147",
-                "numOutputRows": "5",
-            },
+    last_commit_info == pd.json_normalize(
+        {
+            "commitInfo": {
+                "timestamp": 1630942389906,
+                "operation": "WRITE",
+                "operationParameters": {"mode": "Append", "partitionBy": "[]"},
+                "readVersion": 24.0,
+                "isBlindAppend": True,
+                "operationMetrics": {
+                    "numFiles": "6",
+                    "numOutputBytes": "5147",
+                    "numOutputRows": "5",
+                },
+            }
         }
-    })
+    )
 
     # check whether the logs are sorted
     current_timestamp = history.loc[0, "timestamp"]
-    for h in history['timestamp'].tolist()[1:]:
+    for h in history["timestamp"].tolist()[1:]:
         assert current_timestamp > h, "History Not Sorted"
         current_timestamp = h
 
@@ -251,4 +248,3 @@ def test_read_delta_with_error():
     with pytest.raises(ValueError) as exc_info:
         ddl.read_delta()
     assert str(exc_info.value) == "Please Provide Delta Table path"
-

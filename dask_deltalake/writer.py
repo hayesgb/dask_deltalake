@@ -7,8 +7,6 @@ from datetime import datetime
 from itertools import chain
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
-from fsspec.core import get_fs_token_paths
-from fsspec.spec import AbstractFileSystem
 
 import dask
 import dask.dataframe as dd
@@ -19,22 +17,16 @@ from dask.base import tokenize
 from dask.dataframe.io.utils import _is_local_fs
 from dask.delayed import delayed
 from deltalake import DeltaTable
-from deltalake._internal import write_new_deltalake, DeltaFileSystemHandler
+from deltalake._internal import DeltaFileSystemHandler, write_new_deltalake
 from deltalake.fs import DeltaStorageHandler
 # from deltalake.schema import delta_arrow_schema_from_pandas
-from deltalake.table import (
-    MAX_SUPPORTED_WRITER_VERSION,
-    DeltaTable,
-    DeltaTableProtocolError,
-    PyDeltaTableError,
-)
-from deltalake.writer import (
-    AddAction,  # get_partitions_from_path,
-    DeltaJSONEncoder,
-    get_file_stats_from_metadata,
-    try_get_deltatable,
-)
+from deltalake.table import (MAX_SUPPORTED_WRITER_VERSION, DeltaTable,
+                             DeltaTableProtocolError, PyDeltaTableError)
+from deltalake.writer import AddAction  # get_partitions_from_path,
+from deltalake.writer import (DeltaJSONEncoder, get_file_stats_from_metadata,
+                              try_get_deltatable)
 from fsspec.core import get_fs_token_paths
+from fsspec.spec import AbstractFileSystem
 
 PYARROW_MAJOR_VERSION = int(pa.__version__.split(".", maxsplit=1)[0])
 
@@ -221,8 +213,8 @@ def to_delta(
                 pyarrow_storage_options = {
                     "access_key": storage_options["AWS_ACCESS_KEY_ID"],
                     "secret_key": storage_options["AWS_SECRET_ACCESS_KEY"],
-                    "region": storage_options["AWS_REGION"]
-                    }
+                    "region": storage_options["AWS_REGION"],
+                }
             _, normalized_path = pa_fs.FileSystem.from_uri(table_uri)
             raw_fs = pa_fs.S3FileSystem(**pyarrow_storage_options)
             fs = pa_fs.SubTreeFileSystem(normalized_path, raw_fs)
@@ -231,7 +223,7 @@ def to_delta(
             table = try_get_deltatable(table_uri, storage_options)
         except Exception:
             raise PyDeltaTableError("Failed to find table.  Confirm storage_options")
-            
+
     elif isinstance(table_or_uri, DeltaTable):
         table = table_or_uri
         table_uri = table._table.table_uri()
@@ -299,7 +291,6 @@ def to_delta(
 
     results = dask.compute(*results, **compute_kwargs)
     add_actions = list(chain.from_iterable(results))
-
 
     if table is None:
         write_new_deltalake(

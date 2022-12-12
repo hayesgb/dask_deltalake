@@ -1,28 +1,28 @@
 import json
 import os
+from functools import partial
+from pathlib import Path
 from typing import Dict, List, Optional
 from urllib.parse import urlparse
 
 import dask
 import dask.dataframe as dd
 import pandas as pd
+import pyarrow as pa
+import pyarrow.fs as pa_fs
 import pyarrow.parquet as pq
 from aiobotocore.session import get_session
 from dask.base import tokenize
-from dask.dataframe.io import from_delayed
 from dask.dataframe.core import new_dd_object
-from dask.layers import DataFrameIOLayer
-from dask.highlevelgraph import HighLevelGraph
+from dask.dataframe.io import from_delayed
+from dask.dataframe.utils import make_meta
 from dask.delayed import delayed
+from dask.highlevelgraph import HighLevelGraph
+from dask.layers import DataFrameIOLayer
 from deltalake import DeltaTable
 from deltalake.table import DeltaStorageHandler
 from fsspec.core import get_fs_token_paths
 from pyarrow import dataset as pa_ds
-import pyarrow.fs as pa_fs
-from dask.dataframe.utils import make_meta
-from functools import partial
-import pyarrow as pa
-from pathlib import Path
 
 
 class DeltaTableWrapper(object):
@@ -46,7 +46,11 @@ class DeltaTableWrapper(object):
         self.columns = columns
         self.datetime = datetime
         self.storage_options = storage_options
-        self.dt = DeltaTable(table_uri=self.path, version=self.version, storage_options=self.storage_options)
+        self.dt = DeltaTable(
+            table_uri=self.path,
+            version=self.version,
+            storage_options=self.storage_options,
+        )
         if self.datetime:
             self.dt.load_with_datetime(self.datetime)
         self.schema = self.dt.schema().to_pyarrow()
@@ -55,8 +59,8 @@ class DeltaTableWrapper(object):
             pyarrow_storage_options = {
                 "access_key": storage_options["AWS_ACCESS_KEY_ID"],
                 "secret_key": storage_options["AWS_SECRET_ACCESS_KEY"],
-                "region": storage_options["AWS_REGION"]
-                }
+                "region": storage_options["AWS_REGION"],
+            }
             _, normalized_path = pa_fs.FileSystem.from_uri(path)
             raw_fs = pa_fs.S3FileSystem(**pyarrow_storage_options)
             self.fs = pa_fs.SubTreeFileSystem(normalized_path, raw_fs)
@@ -68,7 +72,7 @@ class DeltaTableWrapper(object):
             # self.fs = pa_fs.SubTreeFileSystem(normalized_path, raw_fs)
 
     def read_delta_dataset(self, columns: list = None, filter: list = None):
-        dataset = self.dt.to_pyarrow_dataset(filesystem = self.fs)
+        dataset = self.dt.to_pyarrow_dataset(filesystem=self.fs)
         batches = dataset.to_batches(columns=columns, filter=filter)
         return [b for b in batches if b.num_rows > 0]
 
@@ -77,17 +81,29 @@ class DeltaTableWrapper(object):
         if self.columns:
             cols = meta.columns.tolist()
             cols = [c for c in cols if c not in self.columns]
-            meta = meta.drop(columns = cols)
+            meta = meta.drop(columns=cols)
         return make_meta(meta)
 
     def history(self, limit: Optional[int] = None, **kwargs) -> dd.core.DataFrame:
         history_ = self.dt.history()
-        df = pd.json_normalize(history_).sort_values(by="timestamp", ascending=False).reset_index(drop=True)
+        df = (
+            pd.json_normalize(history_)
+            .sort_values(by="timestamp", ascending=False)
+            .reset_index(drop=True)
+        )
         if limit:
             df = df[df.index < limit]
-        cols = ["timestamp", "operation", "operationParameters.mode", 
-        "operationMetrics.numFiles", "operationMetrics.numOutputBytes", "operationMetrics.numOutputRows",
-        "operationParameters.partitionBy", "readVersion", "isBlindAppend"]
+        cols = [
+            "timestamp",
+            "operation",
+            "operationParameters.mode",
+            "operationMetrics.numFiles",
+            "operationMetrics.numOutputBytes",
+            "operationMetrics.numOutputRows",
+            "operationParameters.partitionBy",
+            "readVersion",
+            "isBlindAppend",
+        ]
         return df[cols]
 
     def _vacuum_helper(self, filename_to_delete: str) -> None:
@@ -132,8 +148,10 @@ class DeltaTableWrapper(object):
             ]
         dask.compute(parts)[0]
 
+
 def _fetch_batches(chunks, arrow_options: dict):
     return pd.concat([chunk.to_pandas(**arrow_options) for chunk in chunks], axis=1)
+
 
 def read_delta(
     path: Optional[str] = None,
@@ -205,7 +223,7 @@ def read_delta(
 
     if path is None:
         raise ValueError("Please Provide Delta Table path")
-    
+
     label = "read-deltalake-"
     output_name = label + tokenize(
         path,
@@ -221,7 +239,7 @@ def read_delta(
         columns=columns,
         storage_options=storage_options,
         datetime=datetime,
-        arrow_options = arrow_options,
+        arrow_options=arrow_options,
     )
 
     batches = dtw.read_delta_dataset(columns, filter)
@@ -233,14 +251,13 @@ def read_delta(
         graph = {(output_name, 0): meta}
         divisions = (None, None)
         return new_dd_object(graph, output_name, meta, divisions)
-    
 
     layer = DataFrameIOLayer(
         output_name,
         meta.columns,
         batches,
         partial(_fetch_batches, arrow_options=arrow_options),
-        label=label
+        label=label,
     )
 
     divisions = tuple([None] * (len(batches) + 1))
