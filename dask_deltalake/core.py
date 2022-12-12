@@ -115,7 +115,7 @@ class DeltaTableWrapper(object):
             filename_to_delete = (
                 f"{full_path.scheme}://{full_path.netloc}/{filename_to_delete}"
             )
-        self.fs.rm_file(self.path + "/" + filename_to_delete)
+        self.fs.delete_file(filename_to_delete)
 
     def vacuum(self, retention_hours: int = 168, dry_run: bool = True) -> None:
         """
@@ -135,14 +135,15 @@ class DeltaTableWrapper(object):
         """
 
         tombstones = self.dt.vacuum(retention_hours=retention_hours)
+
         if dry_run:
             return tombstones
         else:
             parts = [
                 delayed(
                     self._vacuum_helper,
-                    name="delta-vacuum"
-                    + tokenize(self.fs_token, f, retention_hours, dry_run),
+                    name="delta-vacuum-"
+                    + tokenize(self.fs, f, retention_hours, dry_run),
                 )(f)
                 for f in tombstones
             ]

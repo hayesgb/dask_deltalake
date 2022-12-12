@@ -138,4 +138,6 @@ junit/
 # Dask related
 dask-worker-space/
 debugging
+checkpoint
+tests/data
 

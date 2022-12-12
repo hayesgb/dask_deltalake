@@ -230,18 +230,18 @@ def test_read_history(checkpoint_table):
     assert len(history) == 5
 
 
-# def test_vacuum(vacuum_table):
-#     print(vacuum_table)
-#     print(os.listdir(vacuum_table))
-#     tombstones = ddl.vacuum(vacuum_table, dry_run=True)
-#     print(tombstones)
-#     assert len(tombstones) == 4
+def test_vacuum(vacuum_table):
+    print(vacuum_table)
+    print(os.listdir(vacuum_table))
+    tombstones = ddl.vacuum(vacuum_table, dry_run=True)
+    print(tombstones)
+    assert len(tombstones) == 4
 
-#     before_pq_files_len = len(glob.glob(f"{vacuum_table}/*.parquet"))
-#     assert before_pq_files_len == 7
-#     tombstones = ddl.vacuum(vacuum_table, dry_run=False)
-#     after_pq_files_len = len(glob.glob(f"{vacuum_table}/*.parquet"))
-#     assert after_pq_files_len == 3
+    before_pq_files_len = len(glob.glob(f"{vacuum_table}/*.parquet"))
+    assert before_pq_files_len == 7
+    tombstones = ddl.vacuum(vacuum_table, dry_run=False)
+    after_pq_files_len = len(glob.glob(f"{vacuum_table}/*.parquet"))
+    assert after_pq_files_len == 3
 
 
 def test_read_delta_with_error():
