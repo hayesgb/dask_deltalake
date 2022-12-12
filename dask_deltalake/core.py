@@ -14,13 +14,15 @@ from dask.dataframe.core import new_dd_object
 from dask.layers import DataFrameIOLayer
 from dask.highlevelgraph import HighLevelGraph
 from dask.delayed import delayed
-from deltalake import DataCatalog, DeltaTable
+from deltalake import DeltaTable
+from deltalake.table import DeltaStorageHandler
 from fsspec.core import get_fs_token_paths
 from pyarrow import dataset as pa_ds
 import pyarrow.fs as pa_fs
 from dask.dataframe.utils import make_meta
 from functools import partial
 import pyarrow as pa
+from pathlib import Path
 
 
 class DeltaTableWrapper(object):
@@ -45,6 +47,8 @@ class DeltaTableWrapper(object):
         self.datetime = datetime
         self.storage_options = storage_options
         self.dt = DeltaTable(table_uri=self.path, version=self.version, storage_options=self.storage_options)
+        if self.datetime:
+            self.dt.load_with_datetime(self.datetime)
         self.schema = self.dt.schema().to_pyarrow()
         self.arrow_options = arrow_options
         if self.path.startswith("s3://"):
@@ -56,47 +60,35 @@ class DeltaTableWrapper(object):
             _, normalized_path = pa_fs.FileSystem.from_uri(path)
             raw_fs = pa_fs.S3FileSystem(**pyarrow_storage_options)
             self.fs = pa_fs.SubTreeFileSystem(normalized_path, raw_fs)
+        else:
+            table_uri = "file://" + str(Path(self.path).absolute())
+            self.fs = pa_fs.PyFileSystem(DeltaStorageHandler(table_uri))
+            # self.fs = pa_fs.LocalFileSystem()
+            # raw_fs = pa_fs.LocalFileSystem()
+            # self.fs = pa_fs.SubTreeFileSystem(normalized_path, raw_fs)
 
-    def read_delta_dataset(self, **kwargs: Dict[any, any]):
-        schema = kwargs.pop("schema", None) or self.schema
-        filter = kwargs.pop("filter", None)
-        columns = kwargs.pop("columns", None)
+    def read_delta_dataset(self, columns: list = None, filter: list = None):
         dataset = self.dt.to_pyarrow_dataset(filesystem = self.fs)
-        batches = dataset.to_batches(filter=filter, columns=columns)
+        batches = dataset.to_batches(columns=columns, filter=filter)
         return [b for b in batches if b.num_rows > 0]
 
     def make_meta_from_schema(self) -> Dict[str, str]:
         meta = self.schema.empty_table().to_pandas(**self.arrow_options)
         if self.columns:
-            meta = meta.drop(columns = self.columns)
+            cols = meta.columns.tolist()
+            cols = [c for c in cols if c not in self.columns]
+            meta = meta.drop(columns = cols)
         return make_meta(meta)
 
-    def _history_helper(self, log_file_name: str):
-        log = self.fs.cat(log_file_name).decode().split("\n")
-        for line in log:
-            if line:
-                meta_data = json.loads(line)
-                if "commitInfo" in meta_data:
-                    return meta_data["commitInfo"]
-
     def history(self, limit: Optional[int] = None, **kwargs) -> dd.core.DataFrame:
-        delta_log_path = str(self.path).rstrip("/") + "/_delta_log"
-        log_files = self.fs.glob(f"{delta_log_path}/*.json")
-        if len(log_files) == 0:  # pragma no cover
-            raise RuntimeError(f"No History (logs) found at:- {delta_log_path}/")
-        log_files = sorted(log_files, reverse=True)
-        if limit is None:
-            last_n_files = log_files
-        else:
-            last_n_files = log_files[:limit]
-        parts = [
-            delayed(
-                self._history_helper,
-                name="read-delta-history" + tokenize(self.fs_token, f, **kwargs),
-            )(f, **kwargs)
-            for f in list(last_n_files)
-        ]
-        return dask.compute(parts)[0]
+        history_ = self.dt.history()
+        df = pd.json_normalize(history_).sort_values(by="timestamp", ascending=False).reset_index(drop=True)
+        if limit:
+            df = df[df.index < limit]
+        cols = ["timestamp", "operation", "operationParameters.mode", 
+        "operationMetrics.numFiles", "operationMetrics.numOutputBytes", "operationMetrics.numOutputRows",
+        "operationParameters.partitionBy", "readVersion", "isBlindAppend"]
+        return df[cols]
 
     def _vacuum_helper(self, filename_to_delete: str) -> None:
         full_path = urlparse(self.path)
@@ -140,46 +132,15 @@ class DeltaTableWrapper(object):
             ]
         dask.compute(parts)[0]
 
-    def get_pq_files(self) -> List[str]:
-        """
-        get the list of parquet files after loading the
-        current datetime version
-        """
-        __doc__ == self.dt.load_with_datetime.__doc__
-
-        if self.datetime is not None:
-            self.dt.load_with_datetime(self.datetime)
-        return self.dt.file_uris()
-
-def _read_from_catalog(
-    database_name: str, table_name: str, **kwargs
-) -> dd.core.DataFrame:
-    if ("AWS_ACCESS_KEY_ID" not in os.environ) and (
-        "AWS_SECRET_ACCESS_KEY" not in os.environ
-    ):
-        session = get_session()
-        credentials = session.get_credentials()
-        current_credentials = credentials.get_frozen_credentials()
-        os.environ["AWS_ACCESS_KEY_ID"] = current_credentials.access_key
-        os.environ["AWS_SECRET_ACCESS_KEY"] = current_credentials.secret_key
-    data_catalog = DataCatalog.AWS
-    dt = DeltaTable.from_data_catalog(
-        data_catalog=data_catalog, database_name=database_name, table_name=table_name
-    )
-
-    df = dd.read_parquet(dt.file_uris(), **kwargs)
-    return df
-
 def _fetch_batches(chunks, arrow_options: dict):
     return pd.concat([chunk.to_pandas(**arrow_options) for chunk in chunks], axis=1)
 
 def read_delta(
     path: Optional[str] = None,
-    catalog: Optional[str] = None,
-    database_name: str = None,
     table_name: str = None,
     version: int = None,
     columns: List[str] = None,
+    filter: List[tuple] = None,
     storage_options: Dict[str, str] = None,
     datetime: str = None,
     arrow_options: dict = {},
@@ -195,14 +156,6 @@ def read_delta(
     ----------
     path: Optional[str]
         path of Delta table directory
-    catalog: Optional[str]
-        Currently supports only AWS Glue Catalog
-        if catalog is provided, user has to provide database and table name, and delta-rs will fetch the
-        metadata from glue catalog, this is used by dask to read the parquet tables
-    database_name: Optional[str]
-        database name present in the catalog
-    tablename: Optional[str]
-        table name present in the database of the Catalog
     version: int, default None
         DeltaTable Version, used for Time Travelling across the
         different versions of the parquet datasets
@@ -249,45 +202,38 @@ def read_delta(
     >>> ddf = dd.read_delta('s3://bucket/my-delta-table')  # doctest: +SKIP
 
     """
-    if catalog is not None:
-        if (database_name is None) or (table_name is None):
-            raise ValueError(
-                "Since Catalog was provided, please provide Database and table name"
-            )
-        else:
-            resultdf = _read_from_catalog(
-                database_name=database_name, table_name=table_name, **kwargs
-            )
-    else:
-        if path is None:
-            raise ValueError("Please Provide Delta Table path")
-        
-        label = "read-deltalake-"
-        output_name = label + tokenize(
-            path,
-            storage_options,
-            table_name,
-            version,
-            columns,
-            datetime,
-        )
-        dtw = DeltaTableWrapper(
-            path=path,
-            version=version,
-            columns=columns,
-            storage_options=storage_options,
-            datetime=datetime,
-            arrow_options = arrow_options,
-        )
-        batches = dtw.read_delta_dataset()
+
+    if path is None:
+        raise ValueError("Please Provide Delta Table path")
+    
+    label = "read-deltalake-"
+    output_name = label + tokenize(
+        path,
+        storage_options,
+        table_name,
+        version,
+        columns,
+        datetime,
+    )
+    dtw = DeltaTableWrapper(
+        path=path,
+        version=version,
+        columns=columns,
+        storage_options=storage_options,
+        datetime=datetime,
+        arrow_options = arrow_options,
+    )
+
+    batches = dtw.read_delta_dataset(columns, filter)
+
+    meta = dtw.make_meta_from_schema()
 
     if not batches:
-        meta = dd.utils.make_meta({})
-        graph = {{output_name, 0}: meta}
+        meta = dd.utils.make_meta(meta)
+        graph = {(output_name, 0): meta}
         divisions = (None, None)
         return new_dd_object(graph, output_name, meta, divisions)
     
-    meta = dtw.make_meta_from_schema()
 
     layer = DataFrameIOLayer(
         output_name,
@@ -309,8 +255,8 @@ def read_delta_history(
     Run the history command on the DeltaTable.
     The operations are returned in reverse chronological order.
 
-    Parallely reads delta log json files using dask delayed and gathers the
-    list of commit_info (history)
+    Reads the delta log json files into a DataFrame and returns the commitInfo
+    as a Pandas DataFrame, or optionally, a Dask DataFrame, in reverse chronological order
 
     Parameters
     ----------
@@ -321,7 +267,7 @@ def read_delta_history(
 
     Returns
     -------
-        list of the commit infos registered in the transaction log
+         A DataFrame of the commit infos registered in the transaction log
     """
 
     dtw = DeltaTableWrapper(

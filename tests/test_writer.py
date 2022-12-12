@@ -24,5 +24,4 @@ def test_roundtrip_basic(sample_ddf, tmp_path: pathlib.Path):
     assert ("0" * 20 + ".json") in os.listdir(tmp_path / "_delta_log")
 
     ddf_out = ddl.read_delta(str(tmp_path))
-
-    assert_eq(ddf, ddf_out)
+    assert_eq(ddf, ddf_out, check_index=False)

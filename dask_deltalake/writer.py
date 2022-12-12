@@ -21,7 +21,7 @@ from dask.delayed import delayed
 from deltalake import DeltaTable
 from deltalake._internal import write_new_deltalake, DeltaFileSystemHandler
 from deltalake.fs import DeltaStorageHandler
-from deltalake.schema import delta_arrow_schema_from_pandas
+# from deltalake.schema import delta_arrow_schema_from_pandas
 from deltalake.table import (
     MAX_SUPPORTED_WRITER_VERSION,
     DeltaTable,
@@ -42,6 +42,35 @@ PYARROW_MAJOR_VERSION = int(pa.__version__.split(".", maxsplit=1)[0])
 __all__ = "to_delta"
 
 NONE_LABEL = "__null_dask_index__"
+
+
+def delta_arrow_schema_from_pandas(
+    data: "pd.DataFrame",
+) -> Tuple[pa.Table, pa.Schema]:
+    """
+    Infers the schema for the delta table from the Pandas DataFrame.
+    Necessary because of issues such as:  https://github.com/delta-io/delta-rs/issues/686
+    :param data: Data to write.
+    :return: A PyArrow Table and the inferred schema for the Delta Table
+    """
+
+    table = pa.Table.from_pandas(data)
+    schema = table.schema
+    schema_out = []
+    for field in schema:
+        if isinstance(field.type, pa.TimestampType):
+            f = pa.field(
+                name=field.name,
+                type=pa.timestamp("us"),
+                nullable=field.nullable,
+                metadata=field.metadata,
+            )
+            schema_out.append(f)
+        else:
+            schema_out.append(field)
+    schema = pa.schema(schema_out, metadata=schema.metadata)
+    data = pa.Table.from_pandas(data, schema=schema)
+    return data, schema
 
 
 def get_partitions_from_path(path: str) -> Tuple[str, Dict[str, Optional[str]]]:
@@ -185,6 +214,7 @@ def to_delta(
         else:
             # Non-existant local paths are only accepted as fully-qualified URIs
             table_uri = "file://" + str(Path(table_or_uri).absolute())
+            fs = pa_fs.PyFileSystem(DeltaStorageHandler(table_uri))
 
         if storage_options:
             if table_uri.startswith("s3://"):
@@ -197,10 +227,10 @@ def to_delta(
             raw_fs = pa_fs.S3FileSystem(**pyarrow_storage_options)
             fs = pa_fs.SubTreeFileSystem(normalized_path, raw_fs)
 
-            try:
-                table = try_get_deltatable(table_uri, storage_options)
-            except Exception:
-                raise PyDeltaTableError("Failed to find table.  Confirm storage_options")
+        try:
+            table = try_get_deltatable(table_uri, storage_options)
+        except Exception:
+            raise PyDeltaTableError("Failed to find table.  Confirm storage_options")
             
     elif isinstance(table_or_uri, DeltaTable):
         table = table_or_uri
