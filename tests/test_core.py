@@ -6,9 +6,10 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pyarrow.compute as pc
+import pyarrow.dataset as ds
 import pytest
 from dask.dataframe.utils import assert_eq
-from mock import MagicMock, patch
 
 import dask_deltalake as ddl
 
@@ -98,14 +99,14 @@ def test_read_delta_with_different_versions(simple_table):
     assert df.compute().shape == (200, 4)
 
 
-# def test_row_filter(simple_table):
-#     # row filter
-#     df = ddl.read_delta(
-#         simple_table,
-#         version=0,
-#         filter=[("count", ">", 30)],
-#     )
-#     assert df.compute().shape == (61, 3)
+def test_row_filter(simple_table):
+    # row filter
+    df = ddl.read_delta(
+        simple_table,
+        version=0,
+        filter=(ds.field("count") > 30),
+    )
+    assert df.compute().shape == (61, 3)
 
 
 def test_different_columns(simple_table):
@@ -123,15 +124,15 @@ def test_different_schema(simple_table):
     assert df.columns.tolist() == ["id", "count", "temperature", "newColumn"]
 
 
-# def test_partition_filter(partition_table):
-#     # partition filter
-#     df = ddl.read_delta(partition_table, version=0, filter=[("col1", "==", 1)])
-#     assert df.compute().shape == (21, 3)
+def test_partition_filter(partition_table):
+    # partition filter
+    df = ddl.read_delta(partition_table, version=0, filter=(ds.field("col1") == 1))
+    assert df.compute().shape == (21, 3)
 
-#     df = ddl.read_delta(
-#         partition_table, filter=[[("col1", "==", 1)], [("col1", "==", 2)]]
-#     )
-#     assert df.compute().shape == (39, 4)
+    df = ddl.read_delta(
+        partition_table, filter=((ds.field("col1") == 1)) | (ds.field("col1") == 2)
+    )
+    assert df.compute().shape == (39, 4)
 
 
 def test_empty(empty_table1, empty_table2):

@@ -9,6 +9,7 @@ import dask
 import dask.dataframe as dd
 import pandas as pd
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.fs as pa_fs
 import pyarrow.parquet as pq
 from aiobotocore.session import get_session
@@ -67,12 +68,10 @@ class DeltaTableWrapper(object):
         else:
             table_uri = "file://" + str(Path(self.path).absolute())
             self.fs = pa_fs.PyFileSystem(DeltaStorageHandler(table_uri))
-            # self.fs = pa_fs.LocalFileSystem()
-            # raw_fs = pa_fs.LocalFileSystem()
-            # self.fs = pa_fs.SubTreeFileSystem(normalized_path, raw_fs)
 
     def read_delta_dataset(self, columns: list = None, filter: list = None):
         dataset = self.dt.to_pyarrow_dataset(filesystem=self.fs)
+
         batches = dataset.to_batches(columns=columns, filter=filter)
         return [b for b in batches if b.num_rows > 0]
 
@@ -206,11 +205,9 @@ def read_delta(
             shown or not shown.
 
         filter: Union[List[Tuple[str, str, Any]], List[List[Tuple[str, str, Any]]]], default None
-            List of filters to apply, like ``[[('col1', '==', 0), ...], ...]``.
-            Can act as both partition as well as row based filter, above list of filters
-            converted into pyarrow.dataset.Expression built using pyarrow.dataset.Field
-            example:
-                [("x",">",400)] --> pyarrow.dataset.field("x")>400
+            List of filters to apply, like ``(pyarrow.dataset.field('col1') == 0), ...], ...]``.
+            Can act as both partition as well as row based filter:
+                pyarrow.dataset.field("x") > 400
 
     Returns
     -------
