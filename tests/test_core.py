@@ -1,27 +1,42 @@
 import glob
 import os
+import tempfile
 import zipfile
+from pathlib import Path
 
+import numpy as np
+import pandas as pd
+import pyarrow.compute as pc
+import pyarrow.dataset as ds
 import pytest
-from mock import MagicMock, patch
+from dask.dataframe.utils import assert_eq
 
 import dask_deltalake as ddl
 
 
-@pytest.fixture()
-def simple_table(tmpdir):
-    output_dir = tmpdir
+@pytest.fixture(scope="session")
+def simple_table(tmp_path_factory):
+    output_dir = tmp_path_factory.mktemp("test")
     deltaf = zipfile.ZipFile("tests/data/simple.zip")
     deltaf.extractall(output_dir)
-    return str(output_dir) + "/test1/"
+    fpath = [f for f in Path(output_dir).iterdir() if f.is_dir()]
+    if len(fpath) == 1:
+        return fpath[0].as_posix()
+    else:
+        raise RuntimeError
 
 
-@pytest.fixture()
-def simple_table2(tmpdir):
-    output_dir = tmpdir
+@pytest.fixture(scope="session")
+def simple_table2(tmp_path_factory):
+    output_dir = tmp_path_factory.mktemp("test2")
     deltaf = zipfile.ZipFile("tests/data/simple2.zip")
     deltaf.extractall(output_dir)
-    return str(output_dir) + "/simple_table/"
+    fpath = [f for f in Path(output_dir).iterdir() if f.is_dir()]
+    if len(fpath) == 1:
+        return fpath[0].as_posix()
+    else:
+        raise RuntimeError
+    # return str(output_dir) + "/simple_table/"
 
 
 @pytest.fixture()
@@ -48,11 +63,16 @@ def empty_table2(tmpdir):
     return str(output_dir) + "/empty2/"
 
 
-@pytest.fixture()
-def checkpoint_table(tmpdir):
-    output_dir = tmpdir
+@pytest.fixture(scope="session")
+def checkpoint_table():
+    # with tempfile.TemporaryDirectory as td:
+    from pathlib import Path
+
+    cwd = Path.cwd()
+    output_dir = cwd
     deltaf = zipfile.ZipFile("tests/data/checkpoint.zip")
     deltaf.extractall(output_dir)
+    output_dir = str(output_dir)
     return str(output_dir) + "/checkpoint/"
 
 
@@ -72,7 +92,6 @@ def test_read_delta(simple_table):
 
 
 def test_read_delta_with_different_versions(simple_table):
-    print(simple_table)
     df = ddl.read_delta(simple_table, version=0)
     assert df.compute().shape == (100, 3)
 
@@ -85,14 +104,14 @@ def test_row_filter(simple_table):
     df = ddl.read_delta(
         simple_table,
         version=0,
-        filter=[("count", ">", 30)],
+        filter=(ds.field("count") > 30),
     )
     assert df.compute().shape == (61, 3)
 
 
 def test_different_columns(simple_table):
-    df = ddl.read_delta(simple_table, columns=["count", "temperature"])
-    assert df.columns.tolist() == ["count", "temperature"]
+    ddf = ddl.read_delta(simple_table, columns=["count", "temperature"])
+    assert ddf.columns.tolist() == ["count", "temperature"]
 
 
 def test_different_schema(simple_table):
@@ -107,11 +126,11 @@ def test_different_schema(simple_table):
 
 def test_partition_filter(partition_table):
     # partition filter
-    df = ddl.read_delta(partition_table, version=0, filter=[("col1", "==", 1)])
+    df = ddl.read_delta(partition_table, version=0, filter=(ds.field("col1") == 1))
     assert df.compute().shape == (21, 3)
 
     df = ddl.read_delta(
-        partition_table, filter=[[("col1", "==", 1)], [("col1", "==", 2)]]
+        partition_table, filter=((ds.field("col1") == 1)) | (ds.field("col1") == 2)
     )
     assert df.compute().shape == (39, 4)
 
@@ -123,9 +142,9 @@ def test_empty(empty_table1, empty_table2):
     df = ddl.read_delta(empty_table1, version=0)
     assert df.compute().shape == (5, 2)
 
-    with pytest.raises(RuntimeError):
-        # No Parquet files found
-        _ = ddl.read_delta(empty_table2)
+    # with pytest.raises(RuntimeError):
+    #     # No Parquet files found
+    #     _ = ddl.read_delta(empty_table2)
 
 
 def test_checkpoint(checkpoint_table):
@@ -152,61 +171,61 @@ def test_out_of_version_error(simple_table):
 
 
 def test_load_with_datetime(simple_table2):
-    log_dir = f"{simple_table2}_delta_log"
+    log_dir = f"{simple_table2}/_delta_log"
+    print(log_dir)
     log_mtime_pair = [
-        ("00000000000000000000.json", 1588398451.0),
-        ("00000000000000000001.json", 1588484851.0),
-        ("00000000000000000002.json", 1588571251.0),
-        ("00000000000000000003.json", 1588657651.0),
-        ("00000000000000000004.json", 1588744051.0),
+        ("00000000000000000000.json", 1588398451.0),  # 2020-05-02
+        ("00000000000000000001.json", 1588484851.0),  # 2020-05-03
+        ("00000000000000000002.json", 1588571251.0),  # 2020-05-04
+        ("00000000000000000003.json", 1588657651.0),  # 2020-05-05
+        ("00000000000000000004.json", 1588744051.0),  # 2020-05-06
     ]
     for file_name, dt_epoch in log_mtime_pair:
         file_path = os.path.join(log_dir, file_name)
+        print(file_path)
         os.utime(file_path, (dt_epoch, dt_epoch))
 
-    expected = ddl.read_delta(simple_table2, version=0).compute()
-    result = ddl.read_delta(
-        simple_table2, datetime="2020-05-01T00:47:31-07:00"
-    ).compute()
-    assert expected.equals(result)
-    # assert_frame_equal(expected,result)
+    expected = ddl.read_delta(simple_table2, version=0)
+    result = ddl.read_delta(simple_table2, datetime="2020-05-01T00:47:31-07:00")
+    print(result)
+    assert_eq(expected, result)
 
-    expected = ddl.read_delta(simple_table2, version=1).compute()
-    result = ddl.read_delta(
-        simple_table2, datetime="2020-05-02T22:47:31-07:00"
-    ).compute()
-    assert expected.equals(result)
+    expected = ddl.read_delta(simple_table2, version=1)
+    result = ddl.read_delta(simple_table2, datetime="2020-05-02T22:47:31-07:00")
+    assert_eq(expected, result)
 
-    expected = ddl.read_delta(simple_table2, version=4).compute()
-    result = ddl.read_delta(
-        simple_table2, datetime="2020-05-25T22:47:31-07:00"
-    ).compute()
-    assert expected.equals(result)
+    expected = ddl.read_delta(simple_table2, version=4)
+    result = ddl.read_delta(simple_table2, datetime="2020-05-25T22:47:31-07:00")
+    assert_eq(expected, result)
 
 
 def test_read_history(checkpoint_table):
     history = ddl.read_delta_history(checkpoint_table)
     assert len(history) == 26
 
-    last_commit_info = history[0]
-    last_commit_info == {
-        "timestamp": 1630942389906,
-        "operation": "WRITE",
-        "operationParameters": {"mode": "Append", "partitionBy": "[]"},
-        "readVersion": 24,
-        "isBlindAppend": True,
-        "operationMetrics": {
-            "numFiles": "6",
-            "numOutputBytes": "5147",
-            "numOutputRows": "5",
-        },
-    }
+    last_commit_info = history.iloc[0]
+    last_commit_info == pd.json_normalize(
+        {
+            "commitInfo": {
+                "timestamp": 1630942389906,
+                "operation": "WRITE",
+                "operationParameters": {"mode": "Append", "partitionBy": "[]"},
+                "readVersion": 24.0,
+                "isBlindAppend": True,
+                "operationMetrics": {
+                    "numFiles": "6",
+                    "numOutputBytes": "5147",
+                    "numOutputRows": "5",
+                },
+            }
+        }
+    )
 
     # check whether the logs are sorted
-    current_timestamp = history[0]["timestamp"]
-    for h in history[1:]:
-        assert current_timestamp > h["timestamp"], "History Not Sorted"
-        current_timestamp = h["timestamp"]
+    current_timestamp = history.loc[0, "timestamp"]
+    for h in history["timestamp"].tolist()[1:]:
+        assert current_timestamp > h, "History Not Sorted"
+        current_timestamp = h
 
     history = ddl.read_delta_history(checkpoint_table, limit=5)
     assert len(history) == 5
@@ -230,31 +249,3 @@ def test_read_delta_with_error():
     with pytest.raises(ValueError) as exc_info:
         ddl.read_delta()
     assert str(exc_info.value) == "Please Provide Delta Table path"
-
-
-def test_catalog_with_error():
-    with pytest.raises(ValueError) as exc_info:
-        ddl.read_delta(catalog="glue")
-    assert (
-        str(exc_info.value)
-        == "Since Catalog was provided, please provide Database and table name"
-    )
-
-
-def test_catalog(simple_table):
-    dt = MagicMock()
-
-    def delta_mock(**kwargs):
-        from deltalake import DeltaTable
-
-        files = glob.glob(simple_table + "/*parquet")
-        dt.file_uris = MagicMock(return_value=files)
-        return dt
-
-    with patch(
-        "deltalake.DeltaTable.from_data_catalog", side_effect=delta_mock
-    ) as mock:
-        os.environ["AWS_ACCESS_KEY_ID"] = "apple"
-        os.environ["AWS_SECRET_ACCESS_KEY"] = "greatsecret"
-        df = ddl.read_delta(catalog="glue", database_name="stores", table_name="orders")
-        assert df.compute().shape == (200, 3)

@@ -17,21 +17,16 @@ from dask.base import tokenize
 from dask.dataframe.io.utils import _is_local_fs
 from dask.delayed import delayed
 from deltalake import DeltaTable
-from deltalake._internal import write_new_deltalake
+from deltalake._internal import DeltaFileSystemHandler, write_new_deltalake
 from deltalake.fs import DeltaStorageHandler
-from deltalake.schema import delta_arrow_schema_from_pandas
-from deltalake.table import (
-    MAX_SUPPORTED_WRITER_VERSION,
-    DeltaTable,
-    DeltaTableProtocolError,
-)
-from deltalake.writer import (
-    AddAction,  # get_partitions_from_path,
-    DeltaJSONEncoder,
-    get_file_stats_from_metadata,
-    try_get_deltatable,
-)
+# from deltalake.schema import delta_arrow_schema_from_pandas
+from deltalake.table import (MAX_SUPPORTED_WRITER_VERSION, DeltaTable,
+                             DeltaTableProtocolError, PyDeltaTableError)
+from deltalake.writer import AddAction  # get_partitions_from_path,
+from deltalake.writer import (DeltaJSONEncoder, get_file_stats_from_metadata,
+                              try_get_deltatable)
 from fsspec.core import get_fs_token_paths
+from fsspec.spec import AbstractFileSystem
 
 PYARROW_MAJOR_VERSION = int(pa.__version__.split(".", maxsplit=1)[0])
 
@@ -39,6 +34,35 @@ PYARROW_MAJOR_VERSION = int(pa.__version__.split(".", maxsplit=1)[0])
 __all__ = "to_delta"
 
 NONE_LABEL = "__null_dask_index__"
+
+
+def delta_arrow_schema_from_pandas(
+    data: "pd.DataFrame",
+) -> Tuple[pa.Table, pa.Schema]:
+    """
+    Infers the schema for the delta table from the Pandas DataFrame.
+    Necessary because of issues such as:  https://github.com/delta-io/delta-rs/issues/686
+    :param data: Data to write.
+    :return: A PyArrow Table and the inferred schema for the Delta Table
+    """
+
+    table = pa.Table.from_pandas(data)
+    schema = table.schema
+    schema_out = []
+    for field in schema:
+        if isinstance(field.type, pa.TimestampType):
+            f = pa.field(
+                name=field.name,
+                type=pa.timestamp("us"),
+                nullable=field.nullable,
+                metadata=field.metadata,
+            )
+            schema_out.append(f)
+        else:
+            schema_out.append(field)
+    schema = pa.schema(schema_out, metadata=schema.metadata)
+    data = pa.Table.from_pandas(data, schema=schema)
+    return data, schema
 
 
 def get_partitions_from_path(path: str) -> Tuple[str, Dict[str, Optional[str]]]:
@@ -175,30 +199,40 @@ def to_delta(
 
     meta, schema = delta_arrow_schema_from_pandas(df.head())
 
-    if fs is not None:
-        raise NotImplementedError
-
-    # Get the fs and trim any protocol information from the path before forwarding
     if isinstance(table_or_uri, str):
         if "://" in table_or_uri:
             table_uri = table_or_uri
+
         else:
             # Non-existant local paths are only accepted as fully-qualified URIs
             table_uri = "file://" + str(Path(table_or_uri).absolute())
-        table = try_get_deltatable(table_or_uri, storage_options)
-    else:
+            fs = pa_fs.PyFileSystem(DeltaStorageHandler(table_uri))
+
+        if storage_options:
+            if table_uri.startswith("s3://"):
+                pyarrow_storage_options = {
+                    "access_key": storage_options["AWS_ACCESS_KEY_ID"],
+                    "secret_key": storage_options["AWS_SECRET_ACCESS_KEY"],
+                    "region": storage_options["AWS_REGION"],
+                }
+            _, normalized_path = pa_fs.FileSystem.from_uri(table_uri)
+            raw_fs = pa_fs.S3FileSystem(**pyarrow_storage_options)
+            fs = pa_fs.SubTreeFileSystem(normalized_path, raw_fs)
+
+        try:
+            table = try_get_deltatable(table_uri, storage_options)
+        except Exception:
+            raise PyDeltaTableError("Failed to find table.  Confirm storage_options")
+
+    elif isinstance(table_or_uri, DeltaTable):
         table = table_or_uri
         table_uri = table._table.table_uri()
-
-    table = try_get_deltatable(table_or_uri, storage_options)
-
-    if fs is None:
-        if table is not None:
-            storage_options = table._storage_options or {}
-            storage_options.update(storage_options or {})
-        fs = pa_fs.PyFileSystem(DeltaStorageHandler(table_uri, storage_options))
+    else:
+        raise RuntimeError
 
     if table:  # already exists
+        storage_options = table._storage_options or {}
+        storage_options.update(storage_options or {})
         if schema != table.schema().to_pyarrow() and not (
             mode == "overwrite" and overwrite_schema
         ):
@@ -241,7 +275,7 @@ def to_delta(
     with ctx:
         dfs = df.to_delayed()
         results = [
-            delayed(_write_dataset, name="write-deltalake" + tokenize(table, df))(
+            delayed(_write_dataset, name="write-deltalake-" + tokenize(table, df))(
                 df,
                 table_uri,
                 fs,
