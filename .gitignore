@@ -132,10 +132,9 @@ dmypy.json
 .DS_Store
 junit/
 
-# vscode
-.vscode
-
 # Dask related
 dask-worker-space/
 debugging
-
+checkpoint
+.vscode
+write_table.py
