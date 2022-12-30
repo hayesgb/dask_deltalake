@@ -72,6 +72,8 @@ class DeltaTableWrapper(object):
     def read_delta_dataset(self, columns: list = None, filter: list = None):
         dataset = self.dt.to_pyarrow_dataset(filesystem=self.fs)
 
+        if filter:
+            filter = pq.filters_to_expression(filter)
         batches = dataset.to_batches(columns=columns, filter=filter)
         return [b for b in batches if b.num_rows > 0]
 
@@ -205,9 +207,9 @@ def read_delta(
             shown or not shown.
 
         filter: Union[List[Tuple[str, str, Any]], List[List[Tuple[str, str, Any]]]], default None
-            List of filters to apply, like ``(pyarrow.dataset.field('col1') == 0), ...], ...]``.
+            List of filters to apply, like ``[('col1', '==', 0), ...], ...]``.
             Can act as both partition as well as row based filter:
-                pyarrow.dataset.field("x") > 400
+                [("x", ">" 400)] --> pyarrow.dataset.field("x") > 400
 
     Returns
     -------

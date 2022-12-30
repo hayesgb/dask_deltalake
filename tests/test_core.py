@@ -104,7 +104,7 @@ def test_row_filter(simple_table):
     df = ddl.read_delta(
         simple_table,
         version=0,
-        filter=(ds.field("count") > 30),
+        filter=[("count", ">", 30)],
     )
     assert df.compute().shape == (61, 3)
 
@@ -126,11 +126,11 @@ def test_different_schema(simple_table):
 
 def test_partition_filter(partition_table):
     # partition filter
-    df = ddl.read_delta(partition_table, version=0, filter=(ds.field("col1") == 1))
+    df = ddl.read_delta(partition_table, version=0, filter=[("col1", "==", 1)])
     assert df.compute().shape == (21, 3)
 
     df = ddl.read_delta(
-        partition_table, filter=((ds.field("col1") == 1)) | (ds.field("col1") == 2)
+        partition_table, filter=[[("col1", "==", 1)], [("col1", "==", 2)]]
     )
     assert df.compute().shape == (39, 4)
 
